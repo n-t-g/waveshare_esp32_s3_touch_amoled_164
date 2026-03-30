@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/ntg/manolis/esp32c3/esp-32-s3-display-test/docs/ESP32-S3-Touch-AMOLED-1.64-Demo/ESP-IDF/06_LVGL_Test/build/CMakeFiles/bootloader"
+		},
+		{
+			"file" : "/home/ntg/manolis/esp32c3/esp-32-s3-display-test/docs/ESP32-S3-Touch-AMOLED-1.64-Demo/ESP-IDF/06_LVGL_Test/build/CMakeFiles/bootloader.rule"
+		},
+		{
+			"file" : "/home/ntg/manolis/esp32c3/esp-32-s3-display-test/docs/ESP32-S3-Touch-AMOLED-1.64-Demo/ESP-IDF/06_LVGL_Test/build/CMakeFiles/bootloader-complete.rule"
+		},
+		{
+			"file" : "/home/ntg/manolis/esp32c3/esp-32-s3-display-test/docs/ESP32-S3-Touch-AMOLED-1.64-Demo/ESP-IDF/06_LVGL_Test/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule"
+		},
+		{
+			"file" : "/home/ntg/manolis/esp32c3/esp-32-s3-display-test/docs/ESP32-S3-Touch-AMOLED-1.64-Demo/ESP-IDF/06_LVGL_Test/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule"
+		},
+		{
+			"file" : "/home/ntg/manolis/esp32c3/esp-32-s3-display-test/docs/ESP32-S3-Touch-AMOLED-1.64-Demo/ESP-IDF/06_LVGL_Test/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule"
+		},
+		{
+			"file" : "/home/ntg/manolis/esp32c3/esp-32-s3-display-test/docs/ESP32-S3-Touch-AMOLED-1.64-Demo/ESP-IDF/06_LVGL_Test/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule"
+		},
+		{
+			"file" : "/home/ntg/manolis/esp32c3/esp-32-s3-display-test/docs/ESP32-S3-Touch-AMOLED-1.64-Demo/ESP-IDF/06_LVGL_Test/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule"
+		},
+		{
+			"file" : "/home/ntg/manolis/esp32c3/esp-32-s3-display-test/docs/ESP32-S3-Touch-AMOLED-1.64-Demo/ESP-IDF/06_LVGL_Test/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule"
+		},
+		{
+			"file" : "/home/ntg/manolis/esp32c3/esp-32-s3-display-test/docs/ESP32-S3-Touch-AMOLED-1.64-Demo/ESP-IDF/06_LVGL_Test/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"bootloader"
+		],
+		"name" : "bootloader"
+	}
+}

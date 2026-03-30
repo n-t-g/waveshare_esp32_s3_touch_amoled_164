@@ -1,134 +1,218 @@
 #include "lcd_bsp.h"
 #include "esp_lcd_sh8601.h"
 #include "lcd_config.h"
-#include <assert.h>
-#include <stdio.h>
-#include "esp_log.h"
-#include "esp_heap_caps.h"
+#include "FT3168.h"
+static SemaphoreHandle_t lvgl_mux = NULL; //mutex semaphores
+#define LCD_HOST    SPI2_HOST
 
-#define LCD_HOST SPI2_HOST
-/* Column offset: the SH8601 RAM on this board starts at physical column 20. */
-#define LCD_X_OFFSET 0x14
+//#define EXAMPLE_Rotate_90
+#define SH8601_ID 0x86
+#define CO5300_ID 0xff
 
-static const char *TAG = "screen_bsp";
-static esp_lcd_panel_handle_t panel_handle = NULL;
-static esp_lcd_panel_io_handle_t panel_io_handle = NULL;
-volatile int g_lcd_init_step = 0;
 
-/*
- * Init sequence from the Waveshare factory ESP-IDF demo (07_FactoryProgram).
- * 0x11 = Sleep Out (80 ms delay required)
- * 0x29 = Display On (10 ms delay)
- * 0x51 = Set Brightness (last command: full brightness 0xFF)
- */
-static const uint8_t _d80[] = {0x80};
-static const uint8_t _d20[] = {0x20};
-static const uint8_t _dFF[] = {0xFF};
-static const uint8_t _d00[] = {0x00};
-static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
-    {0x11, _d00,  0, 80},
-    {0xC4, _d80,  1, 0},
-    {0x35, _d00,  1, 0},
-    {0x53, _d20,  1, 1},
-    {0x63, _dFF,  1, 1},
-    {0x51, _d00,  1, 1},
-    {0x29, _d00,  0, 10},
-    {0x51, _dFF,  1, 0},
+
+static esp_lcd_panel_io_handle_t amoled_panel_io_handle = NULL; 
+
+static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = 
+{
+  {0x11, (uint8_t []){0x00}, 0, 80},   
+  {0xC4, (uint8_t []){0x80}, 1, 0},
+  
+  {0x35, (uint8_t []){0x00}, 1, 0},
+
+  {0x53, (uint8_t []){0x20}, 1, 1},
+  {0x63, (uint8_t []){0xFF}, 1, 1},
+  {0x51, (uint8_t []){0x00}, 1, 1},
+
+  {0x29, (uint8_t []){0x00}, 0, 10},
+
+  {0x51, (uint8_t []){0xFF}, 1, 0},    //亮度
 };
+
+void lcd_lvgl_Init(void)
+{
+  static lv_disp_draw_buf_t disp_buf; // contains internal graphic buffer(s) called draw buffer(s)
+  static lv_disp_drv_t disp_drv;      // contains callback functions
+
+  const spi_bus_config_t buscfg = SH8601_PANEL_BUS_QSPI_CONFIG(EXAMPLE_PIN_NUM_LCD_PCLK,
+                                                               EXAMPLE_PIN_NUM_LCD_DATA0,
+                                                               EXAMPLE_PIN_NUM_LCD_DATA1,
+                                                               EXAMPLE_PIN_NUM_LCD_DATA2,
+                                                               EXAMPLE_PIN_NUM_LCD_DATA3,
+                                                               EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES * LCD_BIT_PER_PIXEL / 8);
+  ESP_ERROR_CHECK_WITHOUT_ABORT(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
+  esp_lcd_panel_io_handle_t io_handle = NULL;
+
+  const esp_lcd_panel_io_spi_config_t io_config = SH8601_PANEL_IO_QSPI_CONFIG(EXAMPLE_PIN_NUM_LCD_CS,
+                                                                              example_notify_lvgl_flush_ready,
+                                                                              &disp_drv);
+
+  sh8601_vendor_config_t vendor_config = 
+  {
+    .init_cmds = lcd_init_cmds,
+    .init_cmds_size = sizeof(lcd_init_cmds) / sizeof(lcd_init_cmds[0]),
+    .flags = 
+    {
+      .use_qspi_interface = 1,
+    },
+  };
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_config, &io_handle));
+  amoled_panel_io_handle = io_handle;
+  esp_lcd_panel_handle_t panel_handle = NULL;
+  const esp_lcd_panel_dev_config_t panel_config = 
+  {
+    .reset_gpio_num = EXAMPLE_PIN_NUM_LCD_RST,
+    .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+    .bits_per_pixel = LCD_BIT_PER_PIXEL,
+    .vendor_config = &vendor_config,
+  };
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_new_panel_sh8601(io_handle, &panel_config, &panel_handle));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_reset(panel_handle));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_init(panel_handle));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_disp_on_off(panel_handle, true));
+
+  lv_init();
+  lv_color_t *buf1 = heap_caps_malloc(EXAMPLE_LCD_H_RES * EXAMPLE_LVGL_BUF_HEIGHT * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  assert(buf1);
+  lv_color_t *buf2 = heap_caps_malloc(EXAMPLE_LCD_H_RES * EXAMPLE_LVGL_BUF_HEIGHT * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  assert(buf2);
+  lv_disp_draw_buf_init(&disp_buf, buf1, buf2, EXAMPLE_LCD_H_RES * EXAMPLE_LVGL_BUF_HEIGHT);
+  lv_disp_drv_init(&disp_drv);
+  disp_drv.hor_res = EXAMPLE_LCD_H_RES;
+  disp_drv.ver_res = EXAMPLE_LCD_V_RES;
+  disp_drv.flush_cb = example_lvgl_flush_cb;
+  disp_drv.rounder_cb = example_lvgl_rounder_cb;
+  disp_drv.draw_buf = &disp_buf;
+  disp_drv.user_data = panel_handle;
+#ifdef EXAMPLE_Rotate_90
+  disp_drv.sw_rotate = 1;
+  disp_drv.rotated = LV_DISP_ROT_270;
+#endif
+  lv_disp_t *disp = lv_disp_drv_register(&disp_drv);
+
+  static lv_indev_drv_t indev_drv;    // Input device driver (Touch)
+  lv_indev_drv_init(&indev_drv);
+  indev_drv.type = LV_INDEV_TYPE_POINTER;
+  indev_drv.disp = disp;
+  indev_drv.read_cb = example_lvgl_touch_cb;
+  lv_indev_drv_register(&indev_drv);
+
+  const esp_timer_create_args_t lvgl_tick_timer_args = 
+  {
+    .callback = &example_increase_lvgl_tick,
+    .name = "lvgl_tick"
+  };
+  esp_timer_handle_t lvgl_tick_timer = NULL;
+  ESP_ERROR_CHECK(esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer));
+  ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000));
+
+  lvgl_mux = xSemaphoreCreateMutex(); //mutex semaphores
+  assert(lvgl_mux);
+  xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
+  if (example_lvgl_lock(-1)) 
+  {   
+    lv_demo_widgets();      /* A widgets example */
+    //lv_demo_music();        /* A modern, smartphone-like music player demo. */
+    //lv_demo_stress();       /* A stress test for LVGL. */
+    //lv_demo_benchmark();    /* A demo to measure the performance of LVGL or to compare different settings. */
+
+    // Release the mutex
+    example_lvgl_unlock();
+  }
+}
+
+static bool example_lvgl_lock(int timeout_ms)
+{
+  assert(lvgl_mux && "bsp_display_start must be called first");
+
+  const TickType_t timeout_ticks = (timeout_ms == -1) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+  return xSemaphoreTake(lvgl_mux, timeout_ticks) == pdTRUE;
+}
+
+static void example_lvgl_unlock(void)
+{
+  assert(lvgl_mux && "bsp_display_start must be called first");
+  xSemaphoreGive(lvgl_mux);
+}
+static void example_lvgl_port_task(void *arg)
+{
+  uint32_t task_delay_ms = EXAMPLE_LVGL_TASK_MAX_DELAY_MS;
+  for(;;)
+  {
+    if (example_lvgl_lock(-1))
+    {
+      task_delay_ms = lv_timer_handler();
+      
+      example_lvgl_unlock();
+    }
+    if (task_delay_ms > EXAMPLE_LVGL_TASK_MAX_DELAY_MS)
+    {
+      task_delay_ms = EXAMPLE_LVGL_TASK_MAX_DELAY_MS;
+    }
+    else if (task_delay_ms < EXAMPLE_LVGL_TASK_MIN_DELAY_MS)
+    {
+      task_delay_ms = EXAMPLE_LVGL_TASK_MIN_DELAY_MS;
+    }
+    vTaskDelay(pdMS_TO_TICKS(task_delay_ms));
+  }
+}
+static void example_increase_lvgl_tick(void *arg)
+{
+  lv_tick_inc(EXAMPLE_LVGL_TICK_PERIOD_MS);
+}
+static bool example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
+{
+  lv_disp_drv_t *disp_driver = (lv_disp_drv_t *)user_ctx;
+  lv_disp_flush_ready(disp_driver);
+  return false;
+}
+static void example_lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
+{
+  esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t) drv->user_data;
+  const int offsetx1 = area->x1 + 0x14;
+  const int offsetx2 = area->x2 + 0x14;
+  const int offsety1 = area->y1;
+  const int offsety2 = area->y2;
+
+  esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
+}
+void example_lvgl_rounder_cb(struct _lv_disp_drv_t *disp_drv, lv_area_t *area)
+{
+  uint16_t x1 = area->x1;
+  uint16_t x2 = area->x2;
+
+  uint16_t y1 = area->y1;
+  uint16_t y2 = area->y2;
+
+  // round the start of coordinate down to the nearest 2M number
+  area->x1 = (x1 >> 1) << 1;
+  area->y1 = (y1 >> 1) << 1;
+  // round the end of coordinate up to the nearest 2N+1 number
+  area->x2 = ((x2 >> 1) << 1) + 1;
+  area->y2 = ((y2 >> 1) << 1) + 1;
+}
+static void example_lvgl_touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
+{
+  uint16_t tp_x,tp_y;
+  uint8_t win = getTouch(&tp_x,&tp_y);
+  if(win)
+  {
+    data->point.x = tp_x;
+    data->point.y = tp_y;
+    data->state = LV_INDEV_STATE_PRESSED;
+  }
+  else
+  {
+    data->state = LV_INDEV_STATE_RELEASED;
+  }
+}
+
 
 esp_err_t set_amoled_backlight(uint8_t brig)
 {
-    if (!panel_io_handle) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    /* QSPI write-command format: (opcode=0x02 << 24) | (cmd << 8) */
-    uint32_t lcd_cmd = (0x02UL << 24) | (0x51UL << 8);
-    return esp_lcd_panel_io_tx_param(panel_io_handle, (int)lcd_cmd, &brig, 1);
+  uint32_t lcd_cmd = 0x51;
+  lcd_cmd &= 0xff;
+  lcd_cmd <<= 8;
+  lcd_cmd |= 0x02 << 24;
+  return esp_lcd_panel_io_tx_param(amoled_panel_io_handle, lcd_cmd, &brig,1);
 }
-
-void screen_init(void)
-{
-    g_lcd_init_step = 1;
-    const spi_bus_config_t buscfg = SH8601_PANEL_BUS_QSPI_CONFIG(
-        EXAMPLE_PIN_NUM_LCD_PCLK,
-        EXAMPLE_PIN_NUM_LCD_DATA0,
-        EXAMPLE_PIN_NUM_LCD_DATA1,
-        EXAMPLE_PIN_NUM_LCD_DATA2,
-        EXAMPLE_PIN_NUM_LCD_DATA3,
-        EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES * LCD_BIT_PER_PIXEL / 8);
-    ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
-    g_lcd_init_step = 2;
-
-    const esp_lcd_panel_io_spi_config_t io_config = SH8601_PANEL_IO_QSPI_CONFIG(
-        EXAMPLE_PIN_NUM_LCD_CS, NULL, NULL);
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(
-        (esp_lcd_spi_bus_handle_t)LCD_HOST, &io_config, &panel_io_handle));
-    g_lcd_init_step = 3;
-
-    sh8601_vendor_config_t vendor_config = {
-        .init_cmds      = lcd_init_cmds,
-        .init_cmds_size = sizeof(lcd_init_cmds) / sizeof(lcd_init_cmds[0]),
-        .flags          = { .use_qspi_interface = 1 },
-    };
-    const esp_lcd_panel_dev_config_t panel_config = {
-        .reset_gpio_num = EXAMPLE_PIN_NUM_LCD_RST,
-        .color_space    = ESP_LCD_COLOR_SPACE_RGB,
-        .bits_per_pixel = LCD_BIT_PER_PIXEL,
-        .vendor_config  = &vendor_config,
-    };
-
-    ESP_ERROR_CHECK(esp_lcd_new_panel_sh8601(panel_io_handle, &panel_config, &panel_handle));
-    g_lcd_init_step = 4;
-    ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
-    g_lcd_init_step = 5;
-    ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-    g_lcd_init_step = 6;
-    /* Give the AMOLED time to wake from sleep before sending pixel data. */
-    vTaskDelay(pdMS_TO_TICKS(120));
-    /* Explicitly set full brightness (belt-and-suspenders; also sent in init_cmds). */
-    uint8_t full = 0xFF;
-    esp_lcd_panel_io_tx_param(panel_io_handle,
-        (int)((0x02UL << 24) | (0x51UL << 8)), &full, 1);
-    g_lcd_init_step = 7;
-
-    /* Allocate a DMA-capable line buffer (required for SPI color transfers). */
-    uint16_t *chunk = (uint16_t *)heap_caps_malloc(
-        EXAMPLE_LCD_H_RES * CHUNK_LINES * sizeof(uint16_t), MALLOC_CAP_DMA);
-    if (!chunk) {
-        ESP_LOGE(TAG, "chunk alloc failed");
-        return;
-    }
-    for (int i = 0; i < EXAMPLE_LCD_H_RES * CHUNK_LINES; i++) chunk[i] = 0xFFFF; /* white */
-    for (int y = 0; y < EXAMPLE_LCD_V_RES; y += CHUNK_LINES) {
-        int rows = (y + CHUNK_LINES <= EXAMPLE_LCD_V_RES) ? CHUNK_LINES
-                                                           : (EXAMPLE_LCD_V_RES - y);
-        esp_lcd_panel_draw_bitmap(panel_handle,
-            LCD_X_OFFSET, y,
-            LCD_X_OFFSET + EXAMPLE_LCD_H_RES, y + rows,
-            chunk);
-    }
-    heap_caps_free(chunk);
-    g_lcd_init_step = 100; /* success */
-    ESP_LOGI(TAG, "done");
-}
-
-void screen_fill_color(uint16_t color)
-{
-    if (!panel_handle) return;
-
-    uint16_t *line = (uint16_t *)heap_caps_malloc(
-        EXAMPLE_LCD_H_RES * sizeof(uint16_t), MALLOC_CAP_DMA);
-    if (!line) return;
-    for (int i = 0; i < EXAMPLE_LCD_H_RES; i++) line[i] = color;
-
-    for (int y = 0; y < EXAMPLE_LCD_V_RES; y++) {
-        esp_lcd_panel_draw_bitmap(
-            panel_handle,
-            LCD_X_OFFSET, y,
-            LCD_X_OFFSET + EXAMPLE_LCD_H_RES, y + 1,
-            line);
-    }
-    heap_caps_free(line);
-}
-
-
